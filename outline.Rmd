@@ -1,0 +1,444 @@
+---
+title: "HEB report with analysis code"
+author: "Dillon Niederhut"
+date: "September 25, 2014"
+output: pdf_document
+---
+
+```{r, echo = FALSE}
+#options(warn = -1)
+library(MASS)
+library(ggplot2)
+library(reshape2)
+library(xtable)
+data <- read.csv('Comparative data-Table 1.csv', stringsAsFactors = FALSE)
+data$RMR <- as.numeric(data$RMR)
+data$Method <- factor(data$Method)
+data$Source <- factor(data$Source)
+data$RMR[data$RMR == 1] <- NA
+data$logW <- log10(data$W)
+data$logRMR <- log10(data$RMR)
+data$logTEE <- log10(data$TEE)
+data$PAL <- data$TEE / data$RMR
+data$human <- factor(ifelse(data$Genus == 'Homo', 1, 0), labels = c("Nonhuman primate","Human"))
+data$family <- factor(ifelse(data$human == "Human", 4, NA), labels = c("Strepsirrhini","Platyrrhini","Cercopithecoidea","Hominoidea", "Homo"), levels = c(0,1,2,3,4))
+data$family[data$Genus %in% c('Gorilla','Pan','Pongo','Hylobates','Symphalangus')] <- "Hominoidea"
+data$family[data$Genus %in% c("Eulemur","Lemur","Lepilemur","Microcebus")] <- "Strepsirrhini"
+data$family[data$Genus %in% c("Alouatta","Aotus","Ateles","Callicebus","Callimico","Callithrix","Cebus","Marmoset","Saguinas","Saimiri","Tamarin")] <- "Platyrrhini"
+data$family[data$Genus %in% c("Allenopithecus","Cercocebus","Cercopithecus","Macaca","Papio")] <- "Cercopithecoidea"
+data$gorilla <- factor(ifelse(data$Genus == 'Gorilla',1,0))
+data$pan <- factor(ifelse(data$Genus == 'Pan',1,0))
+data$pongo <- factor(ifelse(data$Genus == 'Pongo',1,0))
+data$hylobates <- factor(ifelse(data$Genus == 'Hylobates',1,0))
+un <- read.csv("UN.csv")
+values <- data.frame('id' = factor(1), 'value' = 1)
+data.poly <- merge(values, un, by = c('id'))
+data.poly$logx = log10(data.poly$x)
+data.poly$logy = log10(data.poly$y)
+```
+
+## Descriptives
+
+```{r, echo = FALSE}
+summary(data[,c("logTEE","logW","logRMR","PAL")])
+table(data$Genus)
+table(data$Source)
+table(data$Method)
+```
+
+# Split happens with haplorhines
+
+Differences in energy use between primate clades is obvious
+
+```{r, echo = FALSE, fig.height = 5, fig.width = 10}
+data.primates <- data[data$family != "Homo",]
+data.primates$family <- factor(data.primates$family)
+contrasts(data.primates$family,3) <- matrix(c(-1,.33,.33,.33,
+                                      0,-1,.5,.5,
+                                      0,0,-1,1), nrow = 4, ncol = 3)
+fit <- lm(logTEE ~ logW, data = data.primates)
+data.primates$resid[is.na(data.primates$TEE) == FALSE] <- fit$residuals
+model.1 <- lm(resid ~ family, data = data.primates)
+summary(model.1)
+print.xtable(xtable(model.1), file="clade.tex")
+ggplot(data=data.primates, aes(x = family, y = resid)) + 
+  geom_boxplot(outlier.colour='red') + 
+  xlab('') + 
+  ylab('Model residuals') + 
+  ggtitle('Strepsirrhines have greater TEE than expected')
+ggsave("clade.png", width=18, height=14, units='cm')
+```
+
+# Humans are largest contributor to ape variability
+
+```{r, echo = FALSE}
+summary(lm(logTEE ~ logW + pan, data = data))
+summary(lm(logTEE ~ logW + gorilla, data = data))
+summary(lm(logTEE ~ logW + pongo, data = data))
+summary(lm(logTEE ~ logW + hylobates, data = data))
+summary(lm(logTEE ~ logW + human, data = data))
+logTEE.logW <- lm(logTEE ~ logW, data = data)
+slogTEE.logW <- stepAIC(logTEE.logW, scope = list(upper = ~ logW + human + gorilla + pongo, lower = ~ 1), direction = 'forward')
+summary(slogTEE.logW)
+```
+
+## Total energy expenditure is higher than predicted for a primate
+
+- Dotted line is human trend line, shaded area is WHO established range of human TEE variation
+```{r, echo = FALSE, fig.height = 5, fig.width = 10}
+ggplot(data = data, aes(x = logW, y = logTEE)) + 
+  geom_point(aes(colour = family, shape = family)) + 
+  stat_smooth(data = data[data$human != 'Human',], method = 'lm', 
+              colour = 'black', se=FALSE, fullrange=TRUE) + 
+  geom_abline(intercept = summary(slogTEE.logW)$coefficients[1] + 
+                summary(slogTEE.logW)$coefficients[3], 
+              slope = summary(slogTEE.logW)$coefficients[2], 
+              linetype = 'dashed', colour = 'purple') + 
+  ggtitle("Humans lie far above the nonhuman primate 
+          trend line predicting TEE") + 
+  ylab("TEE (log kCal)") + xlab("Body weight (log kg)") + 
+  geom_polygon(data = data.poly, aes(x = logx, y = logy),
+               fill = 'purple', alpha = 0.25) + 
+  scale_x_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10, 100,1000,10000)) + 
+  scale_y_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10,100,1000,10000)) + 
+  theme(legend.title = element_blank())
+ggsave('tee.png', width=18, height=14, units='cm')
+```
+
+A model that only uses body weight is 
+```{r, echo = FALSE} 
+aicc.human <- slogTEE.logW$anova$AIC[[2]] + ((2*(length(slogTEE.logW$coefficients)-1)*length(slogTEE.logW$coefficients))/(slogTEE.logW$df.residual))
+aicc.simple <- slogTEE.logW$anova$AIC[[1]] + ((2*(length(logTEE.logW$coefficients)-1)*length(logTEE.logW$coefficients))/(logTEE.logW$df.residual))
+exp((aicc.human - aicc.simple)/2)
+``` 
+as likely to minimize information lost as one that includes a variable for humans
+
+Delta r-squared is 
+```{r, echo = FALSE} 
+summary(slogTEE.logW)$r.squared - summary(logTEE.logW)$r.squared 
+```
+, a significantly better prediction at F = 
+
+```{r, echo = FALSE} 
+((summary(slogTEE.logW)$r.squared - summary(logTEE.logW)$r.squared)/(1 - summary(slogTEE.logW)$r.squared))*(summary(slogTEE.logW)$df[[2]])
+```
+
+and p = 
+```{r, echo = FALSE} 
+pf(((summary(slogTEE.logW)$r.squared - summary(logTEE.logW)$r.squared)/(1 - summary(slogTEE.logW)$r.squared))*(summary(slogTEE.logW)$df[[2]]), summary(slogTEE.logW)$df[[1]], summary(slogTEE.logW)$df[[2]],lower.tail = FALSE)
+```
+
+A Fisher's Exact Test reveals that the probability of having all human data points above the trend line is:
+
+```{r, echo = FALSE}
+data$resid[is.na(data$TEE) == FALSE] <- logTEE.logW$residuals
+fisher.test(x = matrix(c(length(data$resid[data$resid < 0 & data$human == 'Human']),
+                         length(data$resid[data$resid > 0 & data$human == 'Human']),
+                         length(data$resid[data$resid < 0 & data$human != 'Human']),
+                         length(data$resid[data$resid > 0 & data$human != 'Human'])
+                         ), nrow = 2, ncol = 2))
+```
+
+# This is not because humans have higher RMR
+
+## Human RMR is greater than expected for a primate of our body size
+
+Streps removed from dataset for RMR calculations
+
+```{r, echo = FALSE, fig.height = 5, fig.width = 10}
+logRMR.logW <- lm(logRMR ~ logW, data[!(data$family %in% c('Strepsirrhini')), ])
+slogRMR.logW<- stepAIC(logRMR.logW, scope = list(upper = ~ logW + human, lower = ~ 1), direction = 'forward')
+ggplot(data = data, aes(x = logW, y = logRMR)) + 
+  geom_point(data = data, aes(colour = family, shape=family)) + 
+  stat_smooth(data = data[!(data$family %in% c('Strepsirrhini', 'Homo')), ], method = 'lm', colour = 'black', se=FALSE) + 
+  geom_abline(intercept = summary(slogRMR.logW)$coefficients[1] + summary(slogTEE.logW)$coefficients[3], slope = summary(slogRMR.logW)$coefficients[2], linetype = 'dashed', colour = 'purple') + 
+  ggtitle("Human RMR is close to the primate trend line") + 
+  ylab("RMR (log kCal)") + xlab("Body weight (log kg)") + 
+  scale_x_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10, 100,1000,10000)) + 
+  scale_y_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10,100,1000,10000))
+ggsave('supprmr.png', width=18, height=14, units='cm')
+```
+
+Human TEE is still significantly higher if you subtract the extra RMR value from humans
+
+```{r, echo = FALSE, fig.height = 5, fig.width = 10}
+data.nostrep <- data[!(data$family %in% c('Strepsirrhini')), ]
+logRMR.logW <- lm(logRMR ~ logW, data.nostrep)
+slogRMR.logW<- stepAIC(logRMR.logW, scope = list(upper = ~ logW + human, lower = ~ 1), direction = 'forward')
+data.nostrep$removedTEE <- log10(data.nostrep$TEE - 
+  10**(summary(slogRMR.logW)$coefficients[[2]]*data.nostrep$logW +
+    summary(slogRMR.logW)$coefficients[[1]]) +  # primate prediction
+  10**(summary(slogRMR.logW)$coefficients[[3]] +
+    summary(slogRMR.logW)$coefficients[[2]]*data.nostrep$logW +
+    summary(slogRMR.logW)$coefficients[[1]]) # human prediction
+)  
+data.nostrep$removedTEE[data.nostrep$human != "Human"] <- data.nostrep$logTEE[data.nostrep$human != "Human"]
+rermr <- lm(removedTEE ~ logW + human, data = data.nostrep)
+summary(rermr)
+```
+
+# This model provides a better fit for both humans and nonhumans than previous analyses
+
+```{r, echo = FALSE, fig.height = 5, fig.width = 10}
+data$key <- data$logTEE - log10(93.3) - data$logW * 0.75
+data$leonard <- data$logTEE - log10(86) - data$logW * 0.792
+data.sub <- data[is.na(data$leonard) == FALSE,c('leonard','key','human')]
+data.sub$resid <- slogTEE.logW$residuals
+data.melt <- melt(data = data.sub, id.vars = c('human'))
+levels(data.melt$variable)<-c('Leonard & Robertson','Key & Ross','Present analysis')
+ggplot(data=data.melt) + 
+  geom_boxplot(aes(x = variable, y = value, colour = human, linetype = human, outlier.colour='red')) + 
+  geom_hline(y=0, linetype = 'dotted') +
+  ggtitle("Error after predicting TEE from weight") + 
+  xlab("") + ylab("Model residuals") + 
+  theme(legend.position="none")
+ggsave('models.png', width=18, height=14, units='cm')
+```
+
+| Model | Range | RMSE | MAE |
+|-------|-------|------|-----|
+| W only | `r range(summary(logTEE.logW)$residuals)` | `r (mean(summary(logTEE.logW)$residuals**2))**.5` | `r median(abs(summary(logTEE.logW)$residuals))` | 
+| Best model | `r range(summary(slogTEE.logW)$residuals)` | `r (mean(summary(slogTEE.logW)$residuals**2))**.5` | `r median(abs(summary(slogTEE.logW)$residuals))` |
+| Key & Ross | `r range(data$key, na.rm=TRUE)` |`r (mean(data$key**2, na.rm=TRUE))**.5` | `r median(abs(data$key), na.rm=TRUE)` |
+| Leonard & Robertson | `r range(data$leonard, na.rm=TRUE)` | `r (mean(data$leonard**2, na.rm=TRUE))**.5` | `r median(abs(data$leonard), na.rm=TRUE)` |
+
+# Humans do not have higher TEE than predicted by brain weight
+
+## a
+
+```{r, echo = FALSE, fig.height = 5, fig.width = 10}
+ggplot(data=data, aes(x=log10(brainweight),y=logTEE)) + 
+  geom_point(aes(colour=family,shape=family)) + 
+  stat_smooth(data = data[data$human != 'Human',],method='lm', fullrange=TRUE, colour='black', se=FALSE) + 
+  ylab('TEE (log kCal)') + 
+  xlab('Brain weight (log g)') +
+  ggtitle('Humans have average TEE for their brain size') + 
+  scale_x_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10, 100,1000,10000)) + 
+  scale_y_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10,100,1000,10000)) + 
+  theme(legend.title = element_blank())
+ggsave('brain.png', width=18, height=14, units='cm')
+```
+
+# Supplementary Materials
+
+## RMR is not typically measured
+
+Much of the data about RMR has been estimated from body weight, and not measured. This is readily apparent when looking at how closely the points fall to a straight line when plotted.
+
+```{r}
+ggplot(data = data, aes(x = logW, y = logRMR)) + 
+  geom_point(data = data, aes(colour = family, shape=family)) + 
+  scale_x_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10, 100,1000,10000)) + 
+  scale_y_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10,100,1000,10000))
+```
+
+## This means that measurements are outliers
+
+Including the actual measured data, which is often much higher, biases the trend line to a higher intercept and lower slope, and makes the human data appear ore divergent than it actually is. Removing the strepsirrhines, which have life history strategies very different from other primates, corrects for most of this problem.
+
+```{r}
+ggplot(data = data, aes(x = logW, y = logRMR)) + 
+  geom_point(data = data, aes(colour = family, shape=family)) + 
+  stat_smooth(method = 'lm', colour = 'black', se=FALSE) + 
+  stat_smooth(data = data[!(data$family %in% c('Strepsirrhini')), ], 
+              method = 'lm', colour = 'red', se=FALSE, linetype='dashed')  + 
+  scale_x_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10, 100,1000,10000)) + 
+  scale_y_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10,100,1000,10000)) + 
+  ggtitle("RMR is often calculated, not measured")
+ggsave('suppRMR.png', width=18, height=14, units='cm')
+```
+
+## Data source has a large influence on TEE
+
+```{r, echo = FALSE}
+data$Source <- factor(data$Source)
+data$CAN <- 0
+data$CAN[data$Source == 'CAN 2003'] <- 1
+data$LR <- 0
+data$LR[data$Source == 'Leonard & Robertson 1997'] <- 1 
+data$P10 <- 0
+data$P10[data$Source == 'Pontzer et al 2010'] <- 1 
+data$P14 <- 0
+data$P14[data$Source == 'Pontzer et al 2014'] <- 1 
+data$POW <- 0
+data$POW[data$Source == 'Power Tardiff Layne 2003'] <- 1 
+data$SIM <- 0
+data$SIM[data$Source == 'Simmen et al 2010'] <- 1 
+data$WS <- 0
+data$WS[data$Source == 'Westerp & Speakman 2008'] <- 1
+summary(lm(logTEE ~ logW + Source, data = data))
+summary(lm(logTEE ~ logW + CAN, data = data))
+summary(lm(logTEE ~ logW + LR, data = data))
+summary(lm(logTEE ~ logW + P10, data = data))
+summary(lm(logTEE ~ logW + P14, data = data))
+summary(lm(logTEE ~ logW + POW, data = data))
+summary(lm(logTEE ~ logW + SIM, data = data))
+summary(lm(logTEE ~ logW + WS, data = data))
+```
+
+```{r, echo = FALSE, fig.height = 5, fig.width = 10}
+data.sub <- data[(data$Source != 'Coehlo 1986') & 
+  (data$Source != 'Rothman Dierenfeld Hintz Pell 2008') & 
+  (data$Source != 'Rothman Dierenfeld Hintz Pell 2008, Smith Jungers 1997') &
+  (is.na(data$TEE) == FALSE),
+  c('Source','logW','logTEE', 'Method')]
+fit <- lm(logTEE ~ logW, data = data.sub)
+data.sub$resid <- fit$residuals
+ggplot(data=data.sub) + 
+  geom_boxplot(aes(x = Source, y = resid, colour = Method)) + 
+  geom_hline(y = 0, linetype = 'dashed') + 
+  ggtitle('Residual scores TEE regressed on 
+          body weight and displayed by source') +
+  ylab('Residual log TEE (kCal/d)') + xlab('log body weight (kg)') + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave('suppsource.png', width=18, height=14, units='cm')
+```
+
+## But this is expected based on the species in each study
+
+```{r, echo=FALSE}
+dcast(data, Source ~ family)
+chisq.test(data$family, data$Source)
+print.xtable(xtable(dcast(data, Source ~ family)), file='suppsource.tex')
+```
+
+## Factorial method underestimates energy expenditure
+
+But this may be a result of its interaction with study population - see preceeding section
+
+```{r, echo=FALSE}
+data$FA <- 0
+data$FA[data$Method == 'Factorial'] <- 1
+summary(lm(logTEE ~ logW + Method, data = data))
+summary(lm(logTEE ~ logW + FA, data = data))
+```
+
+```{r, echo = FALSE, fig.height = 5, fig.width = 10}
+data.narm <- data[is.na(data$logTEE) == FALSE,]
+fit <- lm(logTEE ~ logW, data = data.narm)
+data.narm$resid <- fit$residuals
+ggplot(data=data.narm) + geom_boxplot(aes(x = Method, y = resid, colour = Method)) + 
+  geom_hline(y = 0, linetype = 'dashed') + 
+  ggtitle('Residual scores TEE regressed on 
+          body weight and displayed by source') +
+  ylab('Residual TEE (kCal/d)') + xlab('Body weight (g)') + 
+  theme(legend.position="none")
+ggsave('suppmethod.png', width=18, height=14, units='cm')
+```
+
+## Human TEE effect is robust to removing all factorial data
+
+```{r,echo=FALSE}
+tee.W <- lm(logTEE ~ logW, data = data[data$Method != 'Factorial',])
+stee.W <- stepAIC(tee.W, scope = list(upper = ~ logW + human, lower = ~ 1), direction = 'forward')
+summary(stee.W)
+print.xtable(xtable(summary(stee.W)),file='suppnofactorial.tex')
+```
+
+## Human TEE effect is robust to removing the respiratory quotient data
+
+```{r,echo=FALSE}
+tee.W <- lm(logTEE ~ logW, data = data[data$Method != 'Respiratory Quotient',])
+stee.W <- stepAIC(tee.W, scope = list(upper = ~ logW + human, lower = ~ 1), direction = 'forward')
+summary(stee.W)
+print.xtable(xtable(summary(stee.W)),file='suppnorq.tex')
+```
+
+# Sampling is not independent
+
+## Because:
+
+1. Species are unevenly represented; and, 
+2. Species will tend give similar results to close phylogenetic relations
+3. Data exist at three levels of measurement
+
+Explicitly including this in the model is difficult because:
+
+1. Controlling for phylogeny will destroy the phylogenetic differences that are the property under investigation; and
+
+##  2. Many genera are only attested at one hierarchy
+
+```{r, echo=FALSE, fig.height = 5, fig.width = 10}
+data$level <- 'Group Mean'
+data$level[data$N < 1] <- 'Repeated'
+data$level[data$N == 1] <- 'Individual'
+data$level <- factor(data$level)
+chisq.test(table(data$Genus))
+ggplot(data=data, aes(x=Genus, fill=level)) + 
+  geom_bar() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Aggregate results show the same pattern for genera differences
+
+```{r}
+data.species <- merge(aggregate(logW ~ Species, 
+                                data = data[is.na(data$logTEE) == FALSE,], 
+                                FUN = mean),
+                    aggregate(logTEE ~ Species, 
+                              data = data[is.na(data$logTEE) == FALSE,], 
+                              FUN = mean))
+data.species <- na.omit(data.species)
+data.species$human <- factor(ifelse(data.species$Species == 'sapiens', 1, 0), 
+                             labels = c("Nonhuman primate","Human"))
+data.species <- merge(aggregate(logRMR ~ Species, 
+                                data = data[is.na(data$logRMR) == FALSE,], 
+                                FUN = mean),
+                    data.species)
+data.species <- merge(aggregate(PAL ~ Species, 
+                                data = data[is.na(data$PAL) == FALSE,], 
+                                FUN = mean),
+                    data.species)
+data.species$family <- factor(ifelse(data.species$human == "Human", 4, NA), 
+                              labels = c("Strepsirrhini","Platyrrhini","Cercopithecoidea","Hominoidea", "Homo"), 
+                              levels = c(0,1,2,3,4))
+data.species$family[data.species$Species %in% c("lar", "troglodytes", "pygmaeus", "syndactylus", "beringei", "paniscus", "gorilla")] <- "Hominoidea"
+data.species$family[data.species$Species %in% c("murinus", "catta", "sp", "ruficaudatus")] <- "Strepsirrhini"
+data.species$family[data.species$Species %in% c("palliata", "trivirgatus", "geoffroyi", "moloch", "apella", "albifrons", "imperator", "fuscicollis", "sciureus", "goeldi", "jacchus")] <- "Platyrrhini"
+data.species$family[data.species$Species %in% c("Albigena", "guereza", "fascicularis", "anubis", "mulatta", "torquatus", "papio", "cynocephalus", "radiata", "nigroviridis")] <- "Cercopithecoidea"
+data.species$gorilla <- factor(ifelse(data.species$Species %in% c('beringei', 'gorilla') ,1,0))
+data.species$pan <- factor(ifelse(data.species$Species %in% c("troglodytes", "paniscus") ,1,0))
+data.species$pongo <- factor(ifelse(data.species$Species == "pygmaeus",1,0))
+data.species$hylobates <- factor(ifelse(data.species$Species %in% c("syndactylus", "lar"),1,0))
+```
+
+```{r, echo = FALSE, fig.height = 5, fig.width = 10}
+contrasts(data.species$family,4) <- matrix(c(-1,.25,.25,.25,.25,
+                                      0,-1,.333,.333,.333,
+                                      0,0,-1,.5,.5,
+                                      0,0,0,-1,1), nrow = 5, ncol = 4)
+fit <- summary(lm(logTEE ~ logW, data = data.species))
+data.species$resid <- fit$residuals
+ggplot(data=data.species[data.species$human!='Human', ], 
+       aes(x = family, y = resid)) + 
+  geom_boxplot(outlier.colour='red')
+summary(lm(data=data.species, logTEE ~ logW + family))
+```
+
+## Aggregate results show the same cause of variability in apes
+
+```{r}
+summary(lm(logTEE ~ logW + pan, data = data.species))
+#summary(lm(logTEE ~ logW + gorilla, data = data.species))
+summary(lm(logTEE ~ logW + pongo, data = data.species))
+summary(lm(logTEE ~ logW + hylobates, data = data.species))
+summary(lm(logTEE ~ logW + human, data = data.species))
+```
+
+## Aggregate results show the same human TEE effect
+
+The coefficient is no longer statistically significant, but we believe that this is only a function of the reduction in sample size, as the coefficient itself has actually gotten larger
+
+```{r}
+summary(lm(logTEE ~ logW + human, data=data.species))
+print.xtable(xtable(summary(lm(logTEE ~ logW + human, data=data.species))), file='supptee.tex')
+ggplot(data = data.species, aes(x = logW, y = logTEE)) + 
+  geom_point(aes(colour = family, shape = family), size=3) + 
+  stat_smooth(data = data[data$human != 'Human',], method = 'lm', 
+              colour = 'black', se=FALSE, fullrange=TRUE) + 
+  scale_x_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10, 100,1000,10000)) + 
+  scale_y_continuous(breaks = c(-1,0,1,2,3,4), labels=c(0.1,1,10,100,1000,10000)) + 
+  ggtitle("Humans are farther from trend line
+          in aggregated data")
+ggsave('suppape.png', width=18, height=14, units='cm')
+```
